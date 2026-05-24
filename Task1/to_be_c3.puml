@@ -1,0 +1,192 @@
+@startuml Component_Diagram_Final
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+' ### СИСТЕМНЫЕ ГРАНИЦЫ ###
+System_Boundary(monolith_boundary, "GoFuture Monolith") {
+   
+    System_Boundary(domain_components, "Доменные компоненты") {
+       
+       
+        System_Boundary(booking_domain, "Booking Service") {
+        Container(booking_srv, "Booking Service", "Django App", "Управление бронированиями")
+        ContainerDb(booking_db, "Booking Database", "PostgreSQL", "Данные бронирований")
+    }
+
+    System_Boundary(driver_domain, "Driver Service") {
+        Container(driver_srv, "Driver Service", "Django App", "Управление водителями")
+        ContainerDb(driver_db, "Driver Database", "PostgreSQL", "Данные водителей")
+    }
+
+    System_Boundary(pricing_domain, "Pricing Service") {
+        Container(pricing_srv, "Pricing Service", "Django App", "Ценообразование")
+        ContainerDb(pricing_db, "Pricing Database", "PostgreSQL", "Тарифы и правила")
+        ContainerDb(pricing_db_cache, "In-memory кеш для  pricing'а", "Redis", "Кеширование данных")
+    }
+
+    System_Boundary(payments_domain, "Payments Service") {
+        Container(payments_srv, "Payments Service", "Django App", "Платежи от пассажиров")
+        ContainerDb(payments_db, "Payments Database", "PostgreSQL", "Транзакции и чеки")
+    }
+
+    System_Boundary(payouts_domain, "Payouts Service") {
+        Container(payouts_srv, "Payouts Service", "Django App", "Выплаты водителям")
+        ContainerDb(payouts_db, "Payouts Database", "PostgreSQL", "Данные балансов и выплат")
+    }
+
+    System_Boundary(notification_domain, "Notification Service") {
+        Container(notification_srv, "Notification Service", "Django App", "Управление уведомлениями")
+        ContainerDb(notification_db, "Notification Database", "PostgreSQL", "Шаблоны и очереди")
+         ContainerDb(notification_db_cache, "In-memory кеш для нотификаций", "Redis", "Кеширование данных")
+    }
+
+    System_Boundary(geography_domain, "Geography Service") {
+        Container(geography_srv, "Geography Service", "Django App", "Геопоиск и маршрутизация")
+        ContainerDb(geography_db, "Geography Database", "PostgreSQL", "Пространственные данные")
+         ContainerDb(geography_db_cache, "In-memory кеш для  geography", "Redis", "Кеширование данных")
+    }
+
+    System_Boundary(analytics_domain, "Analytics Service") {
+        Container(analytics_srv, "Analytics Service", "Django App", "Сбор аналитики")
+        Container(analytics_engine, "Analytics Engine", "Spark/Flink", "Обработка данных")
+        Container(analytics_db, "Analytics DB", "ClickHouse", "Хранение аналитики")
+        Container(datalens, "DataLens", "BI Tool", "Визуализация отчётов")
+    }
+
+    System_Boundary(fraud_domain, "Fraud Service") {
+        Container(fraud_srv, "Fraud Service", "Django App", "Обнаружение мошенничества")
+        ContainerDb(fraud_db, "Fraud Database", "PostgreSQL")
+    }
+    }
+}
+
+System_Boundary(celery_boundary, "Celery Workers") {
+    Container(app_worker, "Celery Workers", "Python", "Асинхронная обработка задач")
+    
+    System_Boundary(celery_tasks, "Celery задачи") {
+        Component(notification_tasks, "Notification Tasks", "Celery Task", "Асинхронные задачи уведомлений")
+        Component(payout_tasks, "Payout Tasks", "Celery Task", "Асинхронные задачи выплат")
+        Component(analytics_tasks, "Analytics Tasks", "Celery Task", "Асинхронная аналитика")
+    }
+}
+
+
+
+System_Boundary(queue_boundary, "Очереди") {
+    ContainerQueue(mq_broker, "Брокер сообщений", "RabbitMQ", "Очередь для фоновых задач")
+}
+
+System_Boundary(monitoring_boundary, "Мониторинг") {
+    Container(monitoring, "Prometheus", "Monitoring", "Сбор метрик")
+    Container(grafana, "Grafana", "Dashboard", "Визуализация метрик")
+    Container(loki, "Loki", "Log Aggregation", "Сбор логов")
+    Container(alert_manager, "Alertmanager", "Alert System", "Управление алертами")
+}
+
+System_Boundary(cicd_boundary, "CI/CD") {
+    Container(jenkins, "Jenkins", "CI/CD", "Сборка и деплой")
+    Container(artifact_repo, "Docker Registry", "Artifact Storage", "Хранение образов")
+}
+
+' ### ВНЕШНИЕ СИСТЕМЫ ###
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "FCM", "Push-сервис Google")
+System_Ext(apns, "APNs", "Push-сервис Apple")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-сервис Huawei")
+System_Ext(bank_api, "API Банка", "Банковские выплаты")
+
+' ### КОШМАРНЫЕ СВЯЗИ МЕЖДУ ДОМЕНАМИ ###
+Rel(booking_domain, driver_domain, "▶ назначает водителя", "синхронный вызов")
+Rel(booking_domain, pricing_domain, "▶ запрашивает цену", "синхронный вызов")
+Rel(booking_domain, payments_domain, "▶ инициирует платёж", "синхронный вызов")
+Rel(booking_domain, geography_domain, "▶ ищет маршрут", "синхронный вызов")
+Rel(booking_domain, fraud_domain, "▶ проверяет на мошенничество", "синхронный вызов")
+Rel(booking_domain, notification_domain, "▶ отправляет уведомления", "синхронный вызов")
+
+Rel(driver_domain, pricing_domain, "▶ расчет заработка", "синхронный вызов")
+Rel(payments_domain, fraud_domain, "▶ проверка транзакций", "синхронный вызов")
+Rel(payouts_domain, driver_domain, "▶ данные водителя", "синхронный вызов")
+Rel(geography_domain, analytics_domain, "▶ метрики геопоиска", "синхронный вызов")
+
+' ### ASYNC-СВЯЗИ ЧЕРЕЗ QUEUE ###
+Rel(booking_domain, mq_broker, "▶ уведомления и аналитика", "AMQP")
+Rel(payouts_domain, mq_broker, "▶ выплаты", "AMQP")
+Rel(payments_domain, mq_broker, "▶ отчёты", "AMQP")
+Rel(analytics_domain, mq_broker, "▶ события аналитики", "AMQP")
+
+' ### CELERY TASK WORKERS ###
+Rel(mq_broker, notification_tasks, "▶ задачи уведомлений", "AMQP")
+Rel(mq_broker, payout_tasks, "▶ задачи выплат", "AMQP")
+Rel(mq_broker, analytics_tasks, "▶ задачи аналитики", "AMQP")
+
+' ### CELERY → ВНЕШНИЕ СЕРВИСЫ ###
+Rel(notification_tasks, fcm, "▶ уведомления Android", "REST API")
+Rel(notification_tasks, apns, "▶ уведомления iOS", "REST API")
+Rel(notification_tasks, huawei_push, "▶ уведомления Huawei", "REST API")
+Rel(payout_tasks, bank_api, "▶ банковские выплаты", "REST API")
+
+' ### CELERY → РАБОТА С БАЗОЙ ###
+Rel(notification_tasks, notification_domain, "▶ данные уведомлений", "ORM")
+Rel(payout_tasks, payouts_domain, "▶ выплаты и балансы", "ORM")
+Rel(analytics_tasks, analytics_domain, "▶ аналитические данные", "ORM")
+
+' ### МОНИТОРИНГ - МЕТРИКИ ###
+Rel(booking_domain, monitoring, "▶ метрики бронирований", "Prometheus")
+Rel(payments_domain, monitoring, "▶ метрики платежей", "Prometheus")
+Rel(notification_tasks, monitoring, "▶ метрики уведомлений", "Prometheus")
+Rel(payout_tasks, monitoring, "▶ метрики выплат", "Prometheus")
+Rel(mq_broker, monitoring, "▶ метрики очередей", "RabbitMQ Exporter")
+
+Rel(monitoring, grafana, "▶ данные для дашбордов", "PromQL")
+Rel(grafana, monitoring, "▶ запросы метрик", "PromQL")
+Rel(monitoring, alert_manager, "▶ алерты", "Alert Rules")
+
+' ### МОНИТОРИНГ - ЛОГИ ###
+Rel(booking_domain, loki, "▶ логи бронирований", "Loki Logs")
+Rel(payments_domain, loki, "▶ логи платежей", "Loki Logs")
+Rel(notification_tasks, loki, "▶ логи уведомлений", "Loki Logs")
+Rel(payout_tasks, loki, "▶ логи выплат", "Loki Logs")
+Rel(app_worker, loki, "▶ логи воркеров", "Loki Logs")
+Rel(driver_domain, loki, "▶ логи сервиса водителей", "Loki Logs")
+Rel(pricing_domain, loki, "▶ логи сервиса ценообразования", "Loki Logs")
+Rel(geography_domain, loki, "▶ логи сервиса геопоиска", "Loki Logs")
+Rel(analytics_domain, loki, "▶ логи сервиса аналитики", "Loki Logs")
+Rel(fraud_domain, loki, "▶ логи сервиса нарушений", "Loki Logs")
+
+' ### CI/CD ###
+Rel(jenkins, booking_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, payments_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, driver_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, pricing_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, payouts_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, notification_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, geography_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, analytics_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, fraud_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(jenkins, artifact_repo, "▶ управление образами", "Docker API")
+Rel(artifact_repo, booking_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, payments_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, driver_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, pricing_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, payouts_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, notification_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, geography_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, analytics_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, fraud_domain, "▶ деплой приложения", "Docker Deploy")
+Rel(artifact_repo, artifact_repo, "▶ управление образами", "Docker API")
+
+Rel(jenkins, app_worker, "▶ деплой воркеров", "Docker Deploy")
+
+' ### АНАЛИТИКА ###
+Rel(analytics_srv, analytics_engine, "▶ отправка событий", "AMQP")
+Rel(analytics_tasks, analytics_domain, "▶ обработка данных", "Spark Jobs")
+Rel(analytics_engine, analytics_db, "▶ запись данных", "ETL")
+Rel(analytics_db, datalens, "▶ визуализация отчётов", "SQL")
+
+
+' ### ВНЕШНИЕ ИНТЕГРАЦИИ ###
+Rel(geography_domain, yandex_maps, "▶ геоданные", "Yandex Maps API")
+Rel(payments_domain, yandex_pay, "▶ платежи", "Yandex Pay API")
+
+
+@enduml
