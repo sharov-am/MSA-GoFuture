@@ -1,0 +1,239 @@
+@startuml Container_Diagram_Full_Infrastructure
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(passenger, "Пассажир", "Заказывает поездки")
+Person(driver, "Водитель", "Принимает заказы и получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты")
+Person(dev_engineer, "Разработчик", "Разрабатывает новые функции")
+Person(sre_engineer, "SRE инженер", "Мониторит и поддерживает систему")
+
+System_Boundary(go_future_system, "GoFuture Platform") {
+    ' ### КЛИЕНТСКИЕ ПРИЛОЖЕНИЯ ###
+    Container(web_passenger, "Пассажирское приложение", "iOS/Android/Huawei", "Интерфейс для пассажиров")
+    Container(web_driver, "Водительское приложение", "iOS/Android/Huawei", "Интерфейс для водителей")
+    Container(web_portal, "Корпоративный веб-портал", "Web Application", "Управление заказами")
+    Container(admin_portal, "Админ-панель", "Web Application", "Управление выплатами")
+    
+    ' ### ОСНОВНые МИКРОСЕРВИСЫ ###
+    
+   
+ System_Boundary(api_gateway, "Новая микросервисаня архитектура") {
+       
+      Container(api_gateway_srv, "API Gateway", "Kong / Envoy / Traefik", "Маршрутизация, аутентификация, rate limiting и SSL-терминация")
+     
+      ContainerQueue(kafka, "Kafka topic: booking events", "Kafka", "Топик для событий резервирования такси")
+   
+
+       System_Boundary(booking_domain, "Booking Service") {
+        Container(booking_srv, "Booking Service", "Django App", "Управление бронированиями")
+        ContainerDb(booking_db, "Booking Database для тенанта 1", "PostgreSQL", "Данные бронирований для тенанта 1")
+        ContainerDb(booking_db, "Booking Database для тенанта N", "PostgreSQL", "Данные бронирований для тенанта N")
+    }
+
+    System_Boundary(driver_domain, "Driver Service") {
+        Container(driver_srv, "Driver Service", "Django App", "Управление водителями")
+        ContainerDb(driver_db, "Driver Database для тенанта 1", "PostgreSQL", "Данные водителей для тенанта 1")
+        ContainerDb(driver_db_n, "Driver Database для тенанта N", "PostgreSQL", "Данные водителей тенанта N")
+    }
+
+    System_Boundary(pricing_domain, "Pricing Service") {
+        Container(pricing_srv, "Pricing Service", "Django App", "Ценообразование")
+        ContainerDb(pricing_db, "Pricing Database для тенанта 1", "PostgreSQL", "Тарифы и правила для тенанта 1")
+        ContainerDb(pricing_db_n, "Pricing Database для тенанта N", "PostgreSQL", "Тарифы и правила для тенанта N")
+        ContainerDb(pricing_db_cache, "In-memory кеш для  pricing'а ", "Redis", "Кеширование данных")
+        
+    }
+
+    System_Boundary(payments_domain, "Payments Service") {
+        Container(payments_srv, "Payments Service", "Django App", "Платежи от пассажиров")
+        ContainerDb(payments_db, "Payments Database для тенанта 1", "PostgreSQL", "Транзакции и чеки для тенанта 1")
+        ContainerDb(payments_db_n, "Payments Database для тенанта N", "PostgreSQL", "Транзакции и чеки для тенанта N")
+
+    }
+
+    System_Boundary(payouts_domain, "Payouts Service") {
+        Container(payouts_srv, "Payouts Service", "Django App", "Выплаты водителям")
+        ContainerDb(payouts_db, "Payouts Database для тенанта 1", "PostgreSQL", "Данные балансов и выплат для тенанта 1")
+        ContainerDb(payouts_db_n, "Payouts Database для тенанта N", "PostgreSQL", "Данные балансов и выплат для тенанта N")
+    }
+
+    System_Boundary(notification_domain, "Notification Service") {
+        Container(notification_srv, "Notification Service", "Django App", "Управление уведомлениями")
+        ContainerDb(notification_db, "Notification Database для тенанта 1", "PostgreSQL", "Шаблоны и очереди для тенанта 1")
+        ContainerDb(notification_db_n, "Notification Database для тенанта N", "PostgreSQL", "Шаблоны и очереди для тенанта N")
+        ContainerDb(notification_db_cache, "In-memory кеш для нотификаций", "Redis", "Кеширование данных")
+    }
+
+    System_Boundary(geography_domain, "Geography Service") {
+        Container(geography_srv, "Geography Service", "Django App", "Геопоиск и маршрутизация")
+        ContainerDb(geography_db, "Geography Database для тенанта 1", "PostgreSQL", "Пространственные данные для тенанта 1")
+        ContainerDb(geography_db_n, "Geography Database для тенанта N", "PostgreSQL", "Пространственные данные для тенанта N")
+        ContainerDb(geography_db_cache, "In-memory кеш для  geography", "Redis", "Кеширование данных")
+    }
+
+   
+    System_Boundary(fraud_domain, "Fraud Service") {
+        Container(fraud_srv, "Fraud Service", "Django App", "Обнаружение мошенничества")
+        ContainerDb(fraud_db, "Fraud Database для тенанта 1", "PostgreSQL")
+        ContainerDb(fraud_db_n, "Fraud Database для тенанта N", "PostgreSQL")
+    }
+
+     Container(analytics_domain, "Analytics Domain", "Django App", "Сбор аналитики")
+     Container(nginx, "nginx", "Маршрутизация внутри микросервисов")
+
+    }
+
+       
+    ' ### ОЧЕРЕДИ И ВОРКЕРЫ ###
+    ContainerQueue(mq_broker, "Брокер сообщений", "RabbitMQ", "Очередь для фоновых задач")
+    Container(app_worker, "Воркеры фоновых задач", "Celery", "Обработка асинхронных задач")
+    
+    ContainerQueue(client_booking_events_per_region, "Региональный топик bookings", "Kafka Topic: BookingCreated, BookingCanceled", "События жизненного цикла поездки. Партиционирование по регионам.")
+    ContainerQueue(booking_events_for_pricing, "Региональный топик bookings", "Kafka Topic: BookingCreated, BookingCanceled", "События жизненного цикла поездки. Партиционирование по регионам.")
+    ContainerQueue(driver_events_events_per_region, "Топик drivers для региона 1", "Kafka Topic: DriverBookingAccepted,", "Действия водителей и высокочастотный стрим телеметрии.")
+    ContainerQueue(driver_bus_telemetry_region_1, "Топик для телеметрии водителей для региона 1", "Kafka Topic: DriverBookingAccepted,", "Высокочастотный стрим телеметрии.")
+    ContainerQueue(driver_bus_region_1, "Топик drivers для региона 1", "Kafka Topic: DriverBookingAccepted,", "Действия водителей и высокочастотный стрим телеметрии.")
+
+
+    ' ### МОНИТОРИНГ И OBSERVABILITY ###
+    Container(monitoring, "Prometheus", "Monitoring System", "Сбор метрик и мониторинг")
+    Container(grafana, "Grafana", "Dashboard System", "Визуализация метрик и дашборды")
+    Container(loki, "Loki", "Log Aggregation", "Сбор и анализ логов")
+    Container(alert_manager, "Alertmanager", "Alert System", "Управление алертами")
+    
+    ' ### CI/CD ИНФРАСТРУКТУРА ###
+    Container(jenkins, "Jenkins", "CI/CD Server", "Сборка и деплой монолита")
+    Container(artifact_repo, "Artifact Repository", "Docker Registry", "Хранение образов приложения")
+    Container(ci_worker, "CI/CD Workers", "VM/Containers", "Выполнение задач сборки и тестов")
+    
+    ' ### АНАЛИТИЧЕСКАЯ ИНФРАСТРУКТУРА ###
+    Container(analytics_engine, "Analytics Engine", "Spark/Flink", "Обработка аналитических данных")
+    Container(analytics_db, "Analytics DB", "ClickHouse", "Хранение аналитических данных")
+    Container(datalens, "DataLens", "BI Tool", "Визуализация бизнес-метрик")
+}
+
+
+
+
+' ### ВНЕШНИЕ СИСТЕМЫ ###
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "FCM", "Push-сервис Google")
+System_Ext(apns, "APNs", "Push-сервис Apple")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-сервис Huawei")
+System_Ext(bank_api, "API Банка", "Банковские выплаты")
+
+' ### СВЯЗИ ПОЛЬЗОВАТЕЛЕЙ ###
+Rel(passenger, web_passenger, "Использует")
+Rel(driver, web_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_portal, "Использует")
+Rel(dev_engineer, jenkins, "Запускает сборки")
+Rel(sre_engineer, grafana, "Мониторит систему")
+Rel(sre_engineer, alert_manager, "Настраивает алерты")
+
+' ### БИЗНЕС-ЛОГИКА ###
+
+Rel(web_passenger, api_gateway_srv, "HTTP/REST API")
+Rel(web_driver, api_gateway_srv, "HTTP/REST API")
+Rel(web_portal, api_gateway_srv, "HTTP/REST API")
+Rel(admin_portal, api_gateway_srv, "HTTP/REST API")
+
+' ### МАРШРУТИЗАЦИЯ ВНЕШНИХ ЗАПРОСОВ ###
+Rel(api_gateway_srv, booking_domain, "HTTP/REST API")
+Rel(api_gateway_srv, driver_domain, "HTTP/REST API")
+Rel(api_gateway_srv, payments_domain, "HTTP/REST API")
+Rel(api_gateway_srv, payouts_domain, "HTTP/REST API")
+
+' ### МАРШРУТИЗАЦИЯ ВНУТРЕННИХ ЗАПРОСОВ ###
+BiRel(booking_domain, nginx,  "HTTP/REST API")
+BiRel(payments_domain, nginx, "HTTP/REST API")
+BiRel(notification_domain, nginx, "HTTP/REST API")
+BiRel(driver_domain, nginx, "HTTP/REST API")
+BiRel(pricing_domain, nginx,  "HTTP/REST API")
+BiRel(geography_domain, nginx,  "HTTP/REST API")
+BiRel(fraud_domain, nginx,  "HTTP/REST API")
+
+
+
+Rel(payments_domain, yandex_pay, "Обработка платежей")
+Rel(geography_srv, yandex_maps, "Запросы геоданных")
+Rel(payouts_domain, bank_api, "Инициирование выплат")
+
+Rel(notification_domain, mq_broker, "Задачи нотификации")
+Rel(payouts_domain, mq_broker,  "▶ выплаты", "AMQP")
+Rel(payments_domain, mq_broker,"▶ отчёты", "AMQP")
+Rel(analytics_domain, mq_broker, "▶ события аналитики", "AMQP")
+
+
+' ### ASYNC WORKERS ###
+Rel(app_worker, mq_broker, "Получает задачи из", "AMQP")
+Rel(app_worker, notification_db, "Чтение/запись данных", "ORM")
+Rel(app_worker, analytics_db, "Чтение/запись данных", "ORM")
+Rel(app_worker, payout_db, "Чтение/запись данных", "ORM")
+Rel(app_worker, fcm, "Отправляет уведомления", "REST API")
+Rel(app_worker, apns, "Отправляет уведомления", "REST API")
+Rel(app_worker, huawei_push, "Отправляет уведомления", "REST API")
+Rel(app_worker, bank_api, "Выполняет выплаты", "REST API")
+
+' ### МОНИТОРИНГ ###
+Rel(booking_domain, monitoring, "▶ Отправляет метрики бронирований", "Loki Logs")
+Rel(payments_domain, monitoring, "▶ Отправляет метрики платежей", "Loki Logs")
+Rel(notification_tasks, monitoring, "▶ Отправляет метрики уведомлений", "Loki Logs")
+Rel(driver_domain, monitoring, "▶ Отправляет метрики сервиса водителей", "Loki Logs")
+Rel(pricing_domain, monitoring, "▶ Отправляет метрики сервиса ценообразования", "Loki Logs")
+Rel(geography_domain, monitoring, "▶ Отправляет метрики сервиса геопоиска", "Loki Logs")
+Rel(fraud_domain, monitoring, "▶ Отправляет метрики сервиса нарушений", "Loki Logs")
+Rel(app_worker, monitoring, "Отправляет метрики", "Prometheus Metrics")
+
+Rel(mq_broker, monitoring, "Метрики очередей", "RabbitMQ Exporter")
+
+Rel(booking_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(payments_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(payout_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(driver_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(pricing_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(geography_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(analytics_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+Rel(fraud_db, monitoring, "Метрики БД", "PostgreSQL Exporter")
+
+
+Rel(monitoring, grafana, "Предоставляет данные", "PromQL")
+Rel(monitoring, alert_manager, "Отправляет алерты", "Alert Rules")
+Rel(alert_manager, sre_engineer, "Отправляет уведомления", "Email/Slack/Pager")
+
+Rel(booking_domain, loki, "▶ логи бронирований", "Loki Logs")
+Rel(payments_domain, loki, "▶ логи платежей", "Loki Logs")
+Rel(notification_domain, loki, "▶ логи уведомлений", "Loki Logs")
+Rel(notification_tasks, loki, "▶ логи уведомлений", "Loki Logs")
+Rel(driver_domain, loki, "▶ логи сервиса водителей", "Loki Logs")
+Rel(pricing_domain, loki, "▶ логи сервиса ценообразования", "Loki Logs")
+Rel(geography_domain, loki, "▶ логи сервиса геопоиска", "Loki Logs")
+Rel(fraud_domain, loki, "▶ логи сервиса нарушений", "Loki Logs")
+Rel(app_worker, loki, "Отправляет логи", "Loki Logs")
+
+' ### CI/CD ###
+Rel(jenkins, ci_worker, "Запускает задачи", "SSH/API")
+Rel(ci_worker, artifact_repo, "Пушит образы", "Docker Push")
+Rel(jenkins, artifact_repo, "Деплоит образы", "Docker Pull")
+Rel(ci_worker, booking_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, payments_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, notification_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, driver_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, pricing_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, geography_domain, "Запускает тесты", "Test Execution")
+Rel(ci_worker, fraud_domain, "Запускает тесты", "Test Execution")
+
+
+
+
+' ### АНАЛИТИКА ###
+Rel(analytics_domain, analytics_engine, "▶ отправка событий", "AMQP")
+Rel(app_worker, analytics_engine, "Отправляет события", "AMQP")
+Rel(analytics_engine, analytics_db, "Записывает данные", "ETL Process")
+Rel(analytics_db,datalens, "Предоставляет данные", "SQL Queries")
+Rel(datalens, manager, "Бизнес-отчёты", "Dashboards")
+Rel(datalens, accountant, "Финансовые отчёты", "Dashboards")
+
+@enduml
