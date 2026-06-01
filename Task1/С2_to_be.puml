@@ -15,68 +15,57 @@ System_Boundary(go_future_system, "GoFuture Platform") {
     Container(web_portal, "Корпоративный веб-портал", "Web Application", "Управление заказами")
     Container(admin_portal, "Админ-панель", "Web Application", "Управление выплатами")
     
-    ' ### ОСНОВНые МИКРОСЕРВИСЫ ###
+    ' ###  ОСНОВНые МИКРОСЕРВИСЫ  ###
     
    
  System_Boundary(api_gateway, "Новая микросервисаня архитектура") {
        
       Container(api_gateway_srv, "API Gateway", "Kong / Envoy / Traefik", "Маршрутизация, аутентификация, rate limiting и SSL-терминация")
-     
-      ContainerQueue(kafka, "Kafka topic: booking events", "Kafka", "Топик для событий резервирования такси")
-   
+
+
 
        System_Boundary(booking_domain, "Booking Service") {
         Container(booking_srv, "Booking Service", "Django App", "Управление бронированиями")
-        ContainerDb(booking_db, "Booking Database для тенанта 1", "PostgreSQL", "Данные бронирований для тенанта 1")
-        ContainerDb(booking_db, "Booking Database для тенанта N", "PostgreSQL", "Данные бронирований для тенанта N")
+        ContainerDb(booking_db, "Booking Database", "PostgreSQL", "Данные бронирований")
     }
 
     System_Boundary(driver_domain, "Driver Service") {
         Container(driver_srv, "Driver Service", "Django App", "Управление водителями")
-        ContainerDb(driver_db, "Driver Database для тенанта 1", "PostgreSQL", "Данные водителей для тенанта 1")
-        ContainerDb(driver_db_n, "Driver Database для тенанта N", "PostgreSQL", "Данные водителей тенанта N")
+        ContainerDb(driver_db, "Driver Database", "PostgreSQL", "Данные водителей")
     }
 
     System_Boundary(pricing_domain, "Pricing Service") {
         Container(pricing_srv, "Pricing Service", "Django App", "Ценообразование")
-        ContainerDb(pricing_db, "Pricing Database для тенанта 1", "PostgreSQL", "Тарифы и правила для тенанта 1")
-        ContainerDb(pricing_db_n, "Pricing Database для тенанта N", "PostgreSQL", "Тарифы и правила для тенанта N")
-        ContainerDb(pricing_db_cache, "In-memory кеш для  pricing'а ", "Redis", "Кеширование данных")
-        
+        ContainerDb(pricing_db, "Pricing Database", "PostgreSQL", "Тарифы и правила")
+        ContainerDb(pricing_db_cache, "In-memory кеш для  pricing'а", "Redis", "Кеширование данных")
     }
 
     System_Boundary(payments_domain, "Payments Service") {
         Container(payments_srv, "Payments Service", "Django App", "Платежи от пассажиров")
-        ContainerDb(payments_db, "Payments Database для тенанта 1", "PostgreSQL", "Транзакции и чеки для тенанта 1")
-        ContainerDb(payments_db_n, "Payments Database для тенанта N", "PostgreSQL", "Транзакции и чеки для тенанта N")
-
+        ContainerDb(payments_db, "Payments Database", "PostgreSQL", "Транзакции и чеки")
     }
 
     System_Boundary(payouts_domain, "Payouts Service") {
         Container(payouts_srv, "Payouts Service", "Django App", "Выплаты водителям")
-        ContainerDb(payouts_db, "Payouts Database для тенанта 1", "PostgreSQL", "Данные балансов и выплат для тенанта 1")
-        ContainerDb(payouts_db_n, "Payouts Database для тенанта N", "PostgreSQL", "Данные балансов и выплат для тенанта N")
+        ContainerDb(payout_db, "Payouts Database", "PostgreSQL", "Данные балансов и выплат")
     }
 
     System_Boundary(notification_domain, "Notification Service") {
         Container(notification_srv, "Notification Service", "Django App", "Управление уведомлениями")
-        ContainerDb(notification_db, "Notification Database для тенанта 1", "PostgreSQL", "Шаблоны и очереди для тенанта 1")
-        ContainerDb(notification_db_n, "Notification Database для тенанта N", "PostgreSQL", "Шаблоны и очереди для тенанта N")
+        ContainerDb(notification_db, "Notification Database", "PostgreSQL", "Шаблоны и очереди")
         ContainerDb(notification_db_cache, "In-memory кеш для нотификаций", "Redis", "Кеширование данных")
     }
 
     System_Boundary(geography_domain, "Geography Service") {
         Container(geography_srv, "Geography Service", "Django App", "Геопоиск и маршрутизация")
-        ContainerDb(geography_db, "Geography Database для тенанта 1", "PostgreSQL", "Пространственные данные для тенанта 1")
-        ContainerDb(geography_db_n, "Geography Database для тенанта N", "PostgreSQL", "Пространственные данные для тенанта N")
+        ContainerDb(geography_db, "Geography Database", "PostgreSQL", "Пространственные данные")
         ContainerDb(geography_db_cache, "In-memory кеш для  geography", "Redis", "Кеширование данных")
     }
 
    
     System_Boundary(fraud_domain, "Fraud Service") {
         Container(fraud_srv, "Fraud Service", "Django App", "Обнаружение мошенничества")
-        ContainerDb(fraud_db, "Fraud Database для тенанта 1", "PostgreSQL")
-        ContainerDb(fraud_db_n, "Fraud Database для тенанта N", "PostgreSQL")
+        ContainerDb(fraud_db, "Fraud Database", "PostgreSQL")
     }
 
      Container(analytics_domain, "Analytics Domain", "Django App", "Сбор аналитики")
@@ -84,18 +73,11 @@ System_Boundary(go_future_system, "GoFuture Platform") {
 
     }
 
-       
+      
     ' ### ОЧЕРЕДИ И ВОРКЕРЫ ###
     ContainerQueue(mq_broker, "Брокер сообщений", "RabbitMQ", "Очередь для фоновых задач")
     Container(app_worker, "Воркеры фоновых задач", "Celery", "Обработка асинхронных задач")
     
-    ContainerQueue(client_booking_events_per_region, "Региональный топик bookings", "Kafka Topic: BookingCreated, BookingCanceled", "События жизненного цикла поездки. Партиционирование по регионам.")
-    ContainerQueue(booking_events_for_pricing, "Региональный топик bookings", "Kafka Topic: BookingCreated, BookingCanceled", "События жизненного цикла поездки. Партиционирование по регионам.")
-    ContainerQueue(driver_events_events_per_region, "Топик drivers для региона 1", "Kafka Topic: DriverBookingAccepted,", "Действия водителей и высокочастотный стрим телеметрии.")
-    ContainerQueue(driver_bus_telemetry_region_1, "Топик для телеметрии водителей для региона 1", "Kafka Topic: DriverBookingAccepted,", "Высокочастотный стрим телеметрии.")
-    ContainerQueue(driver_bus_region_1, "Топик drivers для региона 1", "Kafka Topic: DriverBookingAccepted,", "Действия водителей и высокочастотный стрим телеметрии.")
-
-
     ' ### МОНИТОРИНГ И OBSERVABILITY ###
     Container(monitoring, "Prometheus", "Monitoring System", "Сбор метрик и мониторинг")
     Container(grafana, "Grafana", "Dashboard System", "Визуализация метрик и дашборды")
@@ -112,9 +94,6 @@ System_Boundary(go_future_system, "GoFuture Platform") {
     Container(analytics_db, "Analytics DB", "ClickHouse", "Хранение аналитических данных")
     Container(datalens, "DataLens", "BI Tool", "Визуализация бизнес-метрик")
 }
-
-
-
 
 ' ### ВНЕШНИЕ СИСТЕМЫ ###
 System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
