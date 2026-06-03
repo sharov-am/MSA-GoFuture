@@ -1,0 +1,86 @@
+@startuml
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Диаграмма репликации данных и микросервисов (C2 Level)
+
+' Глобальный уровень маршрутизации трафика
+System_Boundary(global_network, "Глобальная сеть") {
+    Container(global_accelerator, "AWS Global Accelerator", "Anycast IP", "Маршрутизирует пользователей по задержке (Latency)")
+}
+
+' ==========================================
+' МАКРОРЕГИОН: ЮГО-ВОСТОЧНАЯ АЗИЯ (ЮВА)
+' ==========================================
+System_Boundary(m_region_sea, "МАКРОРЕГИОН: ЮГО-ВОСТОЧНАЯ АЗИЯ (ЮВА)") {
+
+    System_Boundary(reg_singapore, "Регион: Сингапур") {
+        Container(alb_sg, "AWS ALB (Сингапур)", "Load Balancer", "Терминирует HTTP/2 и gRPC")
+        Container(booking_sg, "Booking Service Domain", "Django App", "Бизнес-логика заказов")
+        ContainerQueue(kafka_sg, "Apache Kafka (SG)", "Cluster", "Топики: Bookings, Driver-Telemetry")
+    }
+
+    System_Boundary(reg_jakarta, "Регион: Джакарта ") {
+        Container(alb_jk, "AWS ALB (Джакарта)", "Load Balancer", "Резервный балансировщик для ЮВА")
+        Container(booking_jk, "Booking Service Domain", "Django App", "Резервный сервис заказов")
+        ContainerQueue(kafka_jk, "Apache Kafka (JK)", "Cluster", "Топики: Bookings, Driver-Telemetry")
+    }
+    
+    ' Распределенная БД в ЮВА
+    ContainerDb(db_sea, "Distributed DB (SEA Cluster)", "CockroachDB / Aurora Global", "Данные азиатских заказов и пользователей")
+}
+
+' ==========================================
+' МАКРОРЕГИОН: ЛАТИНСКАЯ АМЕРИКА (ЛА)
+' ==========================================
+System_Boundary(m_region_latam, "МАКРОРЕГИОН: ЛАТИНСКАЯ АМЕРИКА (ЛА)") {
+
+    System_Boundary(reg_saopaulo, "Регион: Сан-Паулу") {
+        Container(alb_sp, "AWS ALB (Сан-Паулу)", "Load Balancer", "Терминирует HTTP/2 и gRPC")
+        Container(booking_sp, "Booking Service Domain", "Django App", "Бизнес-логика заказов")
+        ContainerQueue(kafka_sp, "Apache Kafka (SP)", "Cluster", "Топики: Bookings, Driver-Telemetry")
+    }
+
+    System_Boundary(reg_mexico, "Регион: Чили ") {
+        Container(alb_mx, "AWS ALB (Мексика)", "Load Balancer", "Резервный балансировщик для ЛА")
+        Container(booking_mx, "Booking Service Domain", "Django App", "Резервный сервис заказов")
+        ContainerQueue(kafka_mx, "Apache Kafka (MX)", "Cluster", "Топики: Bookings, Driver-Telemetry")
+    }
+    
+    ' Распределенная БД в ЛА
+    ContainerDb(db_latam, "Distributed DB (LATAM Cluster)", "CockroachDB / Aurora Global", "Данные латиноамериканских заказов (LGPD)")
+}
+
+' ==========================================
+' СВЯЗИ И НАПРАВЛЕНИЯ РЕПЛИКАЦИИ
+' ==========================================
+
+' Распределение трафика от глобального акселератора
+Rel_D(global_accelerator, alb_sg, "Маршрутизация трафика ЮВА", "Anycast / Latency")
+Rel_D(global_accelerator, alb_sp, "Маршрутизация трафика ЛА", "Anycast / Latency")
+
+' Взаимодействие компонентов внутри регионов (на примере Сингапура и Сан-Паулу)
+Rel(alb_sg, booking_sg, "Запросы пользователей", "HTTP/gRPC")
+Rel(booking_sg, kafka_sg, "События Саги", "Kafka Prot.")
+Rel(booking_jk, kafka_jk, "События Саги", "Kafka Prot.")
+
+Rel(alb_sp, booking_sp, "Запросы пользователей", "HTTP/gRPC")
+Rel(booking_sp, kafka_sp, "События Саги", "Kafka Prot.")
+Rel(booking_mx, kafka_mx, "События Саги", "Kafka Prot.")
+
+
+' Репликация БАЗ ДАННЫХ
+Rel_D(booking_sg, db_sea, "Синхронная запись (Кворум)", "Raft / Paxos")
+Rel_D(booking_jk, db_sea, "Синхронная запись (Кворум)", "Raft / Paxos")
+
+Rel_D(booking_sp, db_latam, "Синхронная запись (Кворум)", "Raft / Paxos")
+Rel_D(booking_mx, db_latam, "Синхронная запись (Кворум)", "Raft / Paxos")
+
+' Асинхронная кросс-континентальная репликация только глобальных справочников (Профили)
+Rel_L(db_sea, db_latam, "АСИНХРОННАЯ РЕПЛИКАЦИЯ\n(Только справочники пользователей,\nзаказы заблокированы)", "Cross-Region / gRPC")
+
+' Репликация ШИНЫ KAFKA (Зеркалирование топиков Саги внутри макрорегионов)
+BiRel(kafka_sg, kafka_jk, "Синхронизация топика Bookings", "Kafka MirrorMaker 2")
+BiRel(kafka_sp, kafka_mx, "Синхронизация топика Bookings", "Kafka MirrorMaker 2")
+
+@endum
