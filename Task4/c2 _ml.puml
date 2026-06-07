@@ -1,0 +1,83 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+
+LAYOUT_LEFT_RIGHT()
+
+title Платформа данных (C2): Дневной стриминг и ночной ML-пайплайн
+
+Person(ml_engineer, "ML engineer", "ML инженер, отвечающий за обудение ML модели")
+
+' Продуктовый слой (микросевисы и тенантские бд)
+System_Boundary(prod_layer, "Продуктовый слой (микросевисы и тенантские бд)") {
+    Container(booking_service, "Booking Service", "Python", "Бизнес-логика заказов")
+    ContainerDb(booking_db, "Booking DB for tenant 1", "PostgreSQL", "Транзакционная база данных тенанта 1")
+    ContainerDb(booking_db_m, "Booking DB for tenant m", "PostgreSQL ", "Транзакционная база данных тенанта m")
+
+    Container(driver_service, "Driver Service", "Python", "Бизнес-логика для водителей")
+    ContainerDb(driver_db, "Driver DB for tenant 1", "PostgreSQL", "Транзакционная база данных тенанта 1")
+    ContainerDb(driver_db_m, "Driver DB for tenant m", "PostgreSQL", "Транзакционная база данных тенанта m")
+}
+
+' Контур CDC и Шины данных
+System_Boundary(ingestion_layer, "Шина данных и CDC (В течение дня)") {
+    Container(debezium, "Debezium (CDC)", "Connector", "Слушает WAL логи БД и превращает их в события логов")
+    ContainerQueue(kafka, "Apache Kafka", "Broker", "Топики: bookings-cdc, driver-cdc, payments-cdc и др.")
+}
+
+' Слой стриминга и оперативного хранения
+System_Boundary(streaming_analytics, "Стриминг и Аналитическое хранилище") {
+    Container(spark_streaming, "Spark Streaming", "Scala / Python", "Вычитывает Kafka, трансформирует и структурирует данные")
+    ContainerDb(clickhouse, "ClickHouse", "OLAP Columnar DB", "Хранилище витрин данных для BI и ML")
+}
+
+' Контур ночного ML-пайплайна
+System_Boundary(ml_orchestration, "ML-Платформа и Оркестрация/Airflow (Ночной контур)") {
+    Container(airflow, "Apache Airflow", "Python / DAG", "Запускает ночные задачи по расписанию")
+    Container(spark_batch, "Spark Batch Jobs", "PySpark", "Ноды 1-3: Выгрузка , очистка и расчет признаков")
+    Container(ml_cluster, "ML Cluster", "Yandex DataSphere", "Нода 4: Дообучение моделей")
+    Container(mlflow, "MLflow Registry", "Service", "Нода 5: Валидация и хранение версий моделей")
+    Container(feature_store, "Feature Store", "Feast", "Хранилище рассчитанных признаков")
+}
+
+' BI слой для людей
+System_Boundary(bi_layer, "Бизнес-аналитика") {
+    Container(bi_tool, "BI инструменты типа Yandex DataLens", "UI Dashboard", "Визуализация ключевых метрик для бизнеса")
+}
+
+' ==========================================
+' СВЯЗИ И НАПРАВЛЕНИЯ ПОТОКОВ ДАННЫХ
+' ==========================================
+
+' 1. Этап сбора данных через CDC
+Rel_D(booking_service, booking_db, "Запись транзакций")
+Rel_D(booking_service, booking_db_m, "Запись транзакций")
+Rel_R(debezium, booking_db, "Читает WAL логи изменений")
+Rel_R(debezium, booking_db_m, "Читает WAL логи изменений")
+Rel_D(debezium, kafka, "1. Записывает изменения в соотв. топики")
+Rel_D(driver_service, driver_db, "Запись транзакций")
+Rel_D(driver_service, driver_db_m, "Запись транзакций")
+Rel_R(debezium, driver_db, "Читает WAL логи изменений")
+Rel_R(debezium, driver_db_m, "Читает WAL логи изменений")
+
+' 2-3. Обработка через Spark Streaming и вставка в ClickHouse
+Rel_R(spark_streaming, kafka, "2. Непрерывно вычитывает события", "Kafka Protocol")
+Rel_D(spark_streaming, clickhouse, "3. Вставляет структурированные микро-батчи", "Native TCP / JDBC")
+
+' Люди смотрят в ClickHouse через BI
+Rel_D(bi_tool, clickhouse, "Запросы дашбордов", "SQL")
+
+' 4. Запуск Airflow и ночного DAG
+Rel_D(airflow, spark_batch, "4. Запускает ноды 1-3 (Очистка и признаки)", "Airflow Operators")
+Rel(spark_batch, clickhouse, "Нода 1: Выгружает вчерашний батч", "SQL / Spark Connector")
+Rel_D(spark_batch, feature_store, "Нода 3: Сохраняет рассчитанные признаки", "gRPC / REST")
+
+' Оставшиеся шаги ночного ML-пайплайна
+Rel_D(airflow, ml_cluster, "Нода 4: Запускает дообучение моделей", "API Call")
+Rel_L(ml_cluster, feature_store, "Читает подготовленные датасеты")
+Rel_D(airflow, mlflow, "Нода 5: Сравнивает метрики моделей", "API Call")
+Rel(mlflow, prod_layer, "Нода 6: Деплоит веса новой валидной модели на прод", "gRPC / REST")
+Rel(mlflow, ml_engineer, "Сообщает о результатах или проблемах через какой-нибудь мессенджер", "websocket / REST")
+
+
+@endum
