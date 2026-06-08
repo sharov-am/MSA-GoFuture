@@ -1,0 +1,113 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+' Объявление участников (Контейнеры из уровня C2)
+Person(client, "Клиент", "Пассажир такси")
+Person(driver, "Водитель", "Исполнитель заказа")
+
+
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(bank_api, "API Банка", "Банковские выплаты")
+
+Container(api_gateway, "API Gateway", "Kong", "Точка входа запросов")
+Container(driver_gateway, "Driver  Gateway", "", "Получает gps позицию и телеметрию от водителей(grpc/ws/udp) или инф-ию о заказах от платформы")
+
+ContainerQueue(booking_broker, "Message booking_broker per region", "Kafka", "Региональная шина для событий жизненного цикла заказов")
+ContainerQueue(driver_broker, "Message drvier_broker per region", "Kafka", "Региональная шина для событий от водителей (gps позиция и телеметрия)")
+
+System_Boundary(booking_service_boundary, "Booking Service Context") {
+    Container(booking_srv, "Booking Service","", "Управление заказами")
+}
+System_Boundary(fraud_service_boundary, "Fraud Service Context") {
+    Container(fraud_srv, "Fraud Service", "", "Проверка рисков")
+}
+System_Boundary(analytics_service_boundary, "Analytics Service Context") {
+    Container(analytics_srv, "Analytics Service", "", "Аналитика и метрики")
+}
+System_Boundary(pricing_service_boundary, "Pricing Service Context") {
+    Container(pricing_srv, "Pricing Service", "", "Динамическое ценообразование")
+}
+System_Boundary(driver_service_boundary, "Driver Service Context") {
+    Container(driver_srv, "Driver Service", "", "Поиск водителей и гео-трекинг")
+}
+System_Boundary(notification_service_boundary, "Notification Service Context") {
+    ContainerQueue(notification_queue,"Notifications incoming queue","","очередь для отправки сообщений пользователям")
+    Container(notification_srv, "Notification Service", "", "Отправка Push/SMS")
+}
+System_Boundary(payments_boundary, "Payments Context") {
+    Container(payments_srv, "Payments & Payouts", "", "Списание и выплаты")
+    ContainerQueue(payments_requests_queue,"Очередь на списание","","Очередь для команд для списание средств со счета клиентов")
+    ContainerQueue(payouts_requests_queue,"Очередь на зачисление","","Очередь для команд на зачисления средств на счет водителей")
+}
+
+
+
+System_Boundary(geolocation_boundary, "Geolocation Context") {
+    Container(geolocation_srv, "geolocation Service", "", "Маршруты и гео-поиск")
+}
+
+' --- ХОРЕОГРАФИЯ СОБЫТИЙ САГИ СОЗДАНИЯ ЗАКАЗА ---
+
+' Шаги 1-2: Создание заказа
+Rel(client, api_gateway,  "1. Клиент создает заказ", "HTTPS/REST")
+Rel(api_gateway, booking_service_boundary, "1. Клиент создает заказ",  "HTTPS/REST")
+Rel(booking_service_boundary, booking_broker, "Booking order saga", "1. Создает событие BookingCreated", "topic:bookings")
+Rel(booking_service_boundary, api_gateway, "2. Ответ: заказ получен и обрабатывается")
+Rel(api_gateway, client, "2. Показ статуса 'Обработка'")
+
+' Шаг 3: Проверка на мошенничество
+Rel(booking_broker, fraud_service_boundary, "Booking order saga", "3. Проверка на мошенничество, читает событие BookingCreated", "topic:booking")
+Rel(fraud_service_boundary, booking_broker, "Booking order saga", "3. Проверка пройдена, генерируется событие BookingAccepted", "topic:booking")
+Rel(fraud_service_boundary, booking_broker, "Booking order saga", "3. Проверка  не пройдена, генерируется событие BookingRejected", "topic:booking")
+Rel(fraud_service_boundary, notification_service_boundary, "Booking order saga", "3. Проверка  не пройдена, сообщение пользователю")
+
+
+' Шаг 4: Вычисление стоимости поездки
+Rel(booking_broker, pricing_service_boundary, "Booking order saga", "4. Вычисляет стоимость поездки, читает событие BookingAccepted", "topic:booking")
+Rel(pricing_service_boundary, booking_broker, "Booking order saga", "4. Цена вычислена, генерируется событие BookingPriceEstablished", "topic:booking")
+Rel(pricing_service_boundary, notification_service_boundary, "Booking order saga", "4. Информируем клиента о цене")
+
+' Шаг 5-6: Подтверждение заказа со стороны клиента
+Rel(client, api_gateway, "5. Клиент одтверждает заказ", "HTTPS/REST")
+Rel(api_gateway, booking_service_boundary, "5. Клиент одтверждает заказ", "HTTPS/REST")
+Rel(booking_service_boundary, booking_broker, "Booking order saga", "6. Клиент подтверждает заказ, генерируем событие BookingConfirmed", "topic:bookings")
+
+' Шаг 7-8: Поиск водителя для заказа
+Rel(booking_broker, driver_service_boundary, "7. Читаем событие BookingConfirmed, подбираем водителя", "topic:booking")
+Rel(driver_service_boundary, geolocation_boundary, "8. Запрашиваем подходящих водитилей поблизости (query)")
+Rel(driver_service_boundary, driver_gateway, "8. Отправляем инф-ию о заказе, ждем ответ")
+Rel(driver_service_boundary, booking_broker, "8. Водитель найден, публикуем событие DriverBookingAccepted", "topic:booking")
+Rel(driver_service_boundary, notification_service_boundary, "8. Водитель найден, информируем клиента о водителе")
+
+' Шаг 9: Выполнение заказа
+Rel(booking_broker, booking_service_boundary, "9. Читаем событие DriverBookingAccepted, меняем статус заказа на 'in progress' ", "topic:booking")
+
+
+' --- ВЗАИМОДЕЙСТВИЕ ВОДИТЕЛЕЙ С СИСТЕМОЙ ---
+Rel(driver, driver_gateway, "Водительское приложение отправляет свою телеметрию на специальный сервер")
+Rel(driver_gateway, driver_broker, "gps и телеметрия")
+Rel(driver_gateway, driver_broker, "Телеметрия от водителя в систему, cообщения типа DriverUpdatedLocation(grpc/websockets)","topic:driver")
+Rel(driver_broker, geolocation_boundary, "Читает соотв. топик и сообщения DriverUpdatedLocation","topic:driver")
+Rel(driver_service_boundary, driver_gateway, "Через websocket или push уведомление отправляется инф-ия о новом заказе")
+Rel(driver, api_gateway, "Водитель завершил заказ.", "HTTPS/REST")
+Rel(api_gateway, driver_service_boundary, "Водитель завершил заказ.", "HTTPS/REST")
+Rel(driver_service_boundary, booking_broker, "Водитель завершил заказ, генерируется событие DriverBookingCompleted", "topic:booking")
+
+
+' --- ОРКЕСТРАЦИЯ СОБЫТИЙ САГИ ЗАВЕРШЕНИЯ и ОПЛАТЫ ЗАКАЗА ---
+Rel(booking_broker, booking_service_boundary,"Payments saga","1. Оплата завершенного заказа, читаем событие DriverBookingCompleted", "topic:booking")
+Rel(booking_service_boundary, payments_boundary,"Payments saga","2. Зачисление средств водителю", "topic:payments_boundary:payouts")
+Rel(payments_boundary, booking_service_boundary,"Payments saga","3. Средства водителю зачислены")
+Rel(booking_service_boundary, payments_boundary,"Payments saga","4. Списание средств со счета клиента", "topic:payments_boundary:payments")
+Rel(payments_boundary, booking_service_boundary,"Payments saga","5. Средства со счета клиента списаны", "topic:payments_boundary:payments")
+Rel(booking_service_boundary, analytics_service_boundary, "6. Передает данные и метрики поездки")
+
+' --- ВЗАИМОДЕЙСТВИЕ С ПЛАТЕЖНЫМИ СЕРВИСАМИ ---
+Rel(payments_boundary, yandex_pay,"Яндекс Пэй", "Платёжный шлюз")
+Rel(payments_boundary, bank_api, "API Банка", "Банковские выплаты")
+
+
+
+@endum

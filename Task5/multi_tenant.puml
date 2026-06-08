@@ -1,0 +1,102 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+
+LAYOUT_LEFT_RIGHT()
+
+title Платформа данных GoFuture: Мультитенантность (Database-per-Tenant) на Postgres
+
+
+' Слой пользователей разных тенантов
+System_Boundary(users_layer, "Пользователи Партнеров (B2B Tenants)") {
+    Person(user_a, "Водитель / Пассажир А", "Клиенты таксопарка А")
+    Person(disp_b, "Диспетчер Б", "Сотрудник офиса таксопарка Б")
+}
+
+' Контур безопасности и аутентификации
+System_Boundary(iam_boundary, "Контур Идентификации (IAM)") {
+    Container(keycloak, "Keycloak", "Identity Provider", "Хранит изолированные Realms для каждого партнера. Поддерживает корпоративный SSO")
+}
+
+
+' Слой маршрутизации трафика
+System_Boundary(gateway_layer, "Периметр сети") {
+    Container(envoy_gateway, "API Gateway ", "Service", "Маршрутизирует запросы, извлекает tenant_id из JWT")
+}
+
+' Слой Бизнес-Сервисов (Общая кодовая база)
+System_Boundary(services_layer, "Микросервисы Платформы (Shared Compute)") {
+    Container(booking_service, "Booking Service", "Python", "Управляет жизненным циклом заказов")
+    Container(driver_service, "Driver Service", "Python", "Управляет поиском и назначением водителей")
+    Container(payments_service, "Payments Service", "Python", "Управляет транзакциями и холдированием карт")
+    Container(pricing_service, "Pricing Service", "Python", "Динамический расчет цены")
+}
+
+' Слой физической изоляции данных (B2B Контур)
+System_Boundary(storage_layer, "Слой хранения (Изолированные БД)") {
+    Container(pg_bouncer, "PgBouncer (Пул коннектов)", "Proxy", "Защищает Postgres от исчерпания соединений (Transaction Pooling)")
+    
+    System_Boundary(tenant_a_db, "Контур Партнера А") {
+        ContainerDb(db_tenant_a, "PostgreSQL (DB Tenant A)", "Instance", "Данные заказов и водителей только Партнера А")
+        Container(debezium_a, "Debezium (CDC A)", "Agent", "Читает WAL логи базы А")
+    }
+    
+    System_Boundary(tenant_b_db, "Контур Партнера Б") {
+        ContainerDb(db_tenant_b, "PostgreSQL (DB Tenant B)", "Instance", "Данные заказов и водителей только Партнера Б")
+        Container(debezium_b, "Debezium (CDC B)", "Agent", "Читает WAL логи базы Б")
+    }
+}
+
+' Слой Шины данных и Аналитики (ML Контур)
+System_Boundary(analytics_layer, "Центральная шина и ML-Платформа (Ночной контур)") {
+    ContainerQueue(kafka, "Apache Kafka", "Broker", "Единая шина. Топики: bookings, payments, driver")
+    Container(spark_streaming, "Spark Streaming", "Engine", "Непрерывно структурирует логи изменений из всех БД")
+    ContainerDb(clickhouse, "Clickhouse", "Clickhouse", "Аналитическое хранилище (Обезличенные данные с tenant_id)")
+    Container(airflow, "Apache Airflow", "Orchestrator", "Запускает ночной DAG дообучения моделей по расписанию")
+}
+
+' ==========================================
+' СВЯЗИ И НАПРАВЛЕНИЯ ПОТОКОВ ДАННЫХ
+' ==========================================
+
+' Аутентификация в Keycloak
+Rel_D(user_a, keycloak, "1. Логин в Realm-A", "HTTPS / OAuth2")
+Rel_D(disp_b, keycloak, "1. Вход через SSO в Realm-B", "SAML 2.0 / OIDC")
+Rel_U(keycloak, user_a, "Выдача JWT (tenant_id='A', role='driver')")
+Rel_U(keycloak, disp_b, "Выдача JWT (tenant_id='B', role='dispatcher')")
+
+
+' Запросы к системе с токеном JWT
+Rel_D(user_a, envoy_gateway, "2. Запрос API / Стрим GPS + JWT", "gRPC / HTTPS")
+Rel_D(disp_b, envoy_gateway, "2. Запрос списка машин + JWT", "HTTPS")
+
+' Маршрутизация запросов к микросервисам
+Rel_D(envoy_gateway, booking_service, "Запросы заказов")
+Rel_D(envoy_gateway, driver_service, "Запросы водителей")
+
+
+' Динамическая маршрутизация через PgBouncer в нужную БД тенанта
+Rel_D(booking_service, pg_bouncer, "Запрос с динамическим DataSource", "TCP / JDBC")
+Rel_D(driver_service, pg_bouncer, "Запрос с динамическим DataSource", "TCP / JDBC")
+Rel_D(payments_service, pg_bouncer, "Запрос с динамическим DataSource", "TCP / JDBC")
+Rel_D(pricing_service, pg_bouncer, "Запрос с динамическим DataSource", "TCP / JDBC")
+
+Rel_D(pg_bouncer, db_tenant_a, "Перенаправляет в БД А", "Если tenant_id == 'A'")
+Rel_D(pg_bouncer, db_tenant_b, "Перенаправляет в БД Б", "Если tenant_id == 'B'")
+
+' Дневной сбор данных через CDC в общую Kafka
+Rel_D(debezium_a, db_tenant_a, "Читает WAL логи")
+Rel_D(debezium_b, db_tenant_b, "Читает WAL логи")
+
+Rel_D(debezium_a, kafka, "Сливает изменения логов А", "Kafka Prot.")
+Rel_D(debezium_b, kafka, "Сливает изменения логов Б", "Kafka Prot.")
+
+' Стриминг из Kafka в единый Lakehouse S3
+Rel_D(kafka, spark_streaming, "Вычитывает все топики")
+Rel_D(spark_streaming, clickhouse, "Записывает вчерашний батч", "Добавляет поле tenant_id")
+
+' Ночной контур Airflow
+Rel_D(airflow, clickhouse, "Ночной DAG: Очистка батча и обучение моделей", "Spark / SQL")
+Rel_U(airflow, pricing_service, "Обновление весов моделей ценообразования", "05:00 ночи")
+
+@endum
